@@ -69,8 +69,13 @@ final class Job {
      * (rewrite and pack; the shader library in the pack is kept), the shaders (split, shaders, pack; the code is kept), or both. The simulated engine never writes
      * into a real pack: its rebuild goes to ondevice/fake-pack.
      */
-    static Job adopt(DumpCheck.Result r, File packDir, boolean code, boolean shaders) throws JSONException {
+    static Job adopt(DumpCheck.Result r, File packDir, boolean code, boolean shaders) throws JSONException { return adopt(r, packDir, code, shaders, false); }
+
+    /** fresh: a rebuild from scratch (a game card's Rebuild from scratch, Ondevice): the code and the shaders both, nothing kept (fresh()) */
+    static Job adopt(DumpCheck.Result r, File packDir, boolean code, boolean shaders, boolean fresh) throws JSONException {
+        if (fresh) { code = true; shaders = true; }
         Job j = create(r, packDir);
+        if (fresh) j.o.put("fresh", true);
         boolean fake = "fake".equals(BuildConfig.NX_PACK_ENGINE);
         boolean ready = !code && !shaders;
         if (ready || !fake) j.o.put("pack", packDir.getPath());
@@ -121,6 +126,15 @@ final class Job {
         for (String k : new String[] {"engine", "dmsh_chain", "dmsh_vk_chain", "xlate_source"}) if (!b.optString(k).equals(a.optString(k))) return true;
         return false;
     }
+
+    /**
+     * A rebuild from scratch (Ondevice, a game card's Manage › Rebuild from scratch): every step runs and nothing an earlier run made is reused. Before its first
+     * step (once: freshPending) the service deletes the split, its kept scan, the per-shader results, the job's libraries and the pack's module key files (so
+     * the rewriter rewrites every module), and the shaders step takes no entries from the pack's older libraries (no delta update)
+     */
+    synchronized boolean fresh() { return o.optBoolean("fresh", false); }
+    synchronized boolean freshPending() { return fresh() && !o.optBoolean("fresh_cleaned", false); }
+    synchronized void freshCleaned() throws JSONException { o.put("fresh_cleaned", true); }
 
     /** Starts the chain's steps over with this APK's versions; the caller deletes their outputs */
     synchronized void resetChainSteps() throws JSONException {

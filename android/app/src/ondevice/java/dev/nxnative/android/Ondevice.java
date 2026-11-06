@@ -52,6 +52,8 @@ final class Ondevice {
 
     /** Prepare the dump (MainActivity's Add game, a game card's Prepare again): checked off the main thread, then asked before anything is written */
     static void prepare(MainActivity a, File dump, boolean again) { if (panel != null && panel.a == a) panel.picked(dump, false, null, again); }
+    /** Rebuild from scratch (a game card's Manage): the code and every shader made again from the dump, nothing an earlier run made reused (Job.fresh); asked first */
+    static void rebuild(MainActivity a, File dump) { if (panel != null && panel.a == a) panel.picked(dump, false, null, true, false, true); }
 
     /** Shaders a delta update of this pack translates (the profile's manifest rows for the pack's older libraries, ShaderLibs.toTranslate), -1 when the manifest has none of them */
     static int deltaShaders(File packDir, String titleId) { return Pack.deltaShaders(packDir, titleId); }
@@ -321,7 +323,10 @@ final class Ondevice {
         void picked(File dump, boolean start, File packOverride, boolean again) { picked(dump, start, packOverride, again, false); }
 
         /** card: an automatic update of a game card's pack (autoUpdate): packOverride is that pack, checked as the pack to keep; nothing else is started or asked */
-        void picked(File dump, boolean start, File packOverride, boolean again, boolean card) {
+        void picked(File dump, boolean start, File packOverride, boolean again, boolean card) { picked(dump, start, packOverride, again, card, false); }
+
+        /** fresh: Rebuild from scratch (Ondevice.rebuild) */
+        void picked(File dump, boolean start, File packOverride, boolean again, boolean card, boolean fresh) {
             if (a.needAccess()) return;
             android.widget.Toast.makeText(a, "Checking " + dump + "…", android.widget.Toast.LENGTH_SHORT).show();
             new Thread(() -> {
@@ -347,11 +352,11 @@ final class Ondevice {
                         // no usable pack: the whole job
                     }
                 }
-                h.post(() -> checked(f, start, packOverride, again, card));
+                h.post(() -> checked(f, start, packOverride, again, card, fresh));
             }, "nxpack-check").start();
         }
 
-        void checked(Found f, boolean start, File packOverride, boolean again, boolean card) {
+        void checked(Found f, boolean start, File packOverride, boolean again, boolean card, boolean fresh) {
             DumpCheck.Result r = f.r;
             if (!r.ok()) { if (!card) { a.error(r.error); show(); } return; }
             // A job in progress for this dump is resumed
@@ -387,6 +392,14 @@ final class Ondevice {
                 return;
             }
             if (card && (f.pack == null || f.build != null)) return;   // an automatic update only updates the shaders of the card's own pack, when its code fits
+            // Rebuild from scratch: the pack's code and every shader made again, whatever its stamps say (a pack that is not there gets the whole job below anyway)
+            if (fresh && f.pack != null) {
+                File pd = f.packDir;
+                confirm("Rebuild from scratch?", "Rewrites the game code and translates every shader again from your dump (" + ShaderLibs.jobMinutesText(Profile.of(r.titleId).shaderTotal)
+                        + ", in the background, best on the charger). Nothing from earlier runs is reused, even what looks current. The game cannot start until it is done.\n\n"
+                        + "Your saves are not touched.\n\nPack: " + pd, "Rebuild", () -> adopt(r, pd, true, true, true));
+                return;
+            }
             // A pack already there (the picked pack folder, else beside the dump): what fits is kept
             if (f.pack != null) {
                 File pd = f.packDir;
@@ -445,9 +458,11 @@ final class Ondevice {
         }
 
         /** A pack that is already there (PackCheck): ready (a done job pointing at it, the game added to the list), or a job that redoes its code, its shaders or both */
-        void adopt(DumpCheck.Result r, File packDir, boolean code, boolean shaders) {
+        void adopt(DumpCheck.Result r, File packDir, boolean code, boolean shaders) { adopt(r, packDir, code, shaders, false); }
+
+        void adopt(DumpCheck.Result r, File packDir, boolean code, boolean shaders, boolean fresh) {
             try {
-                Job j = Job.adopt(r, packDir, code, shaders);
+                Job j = Job.adopt(r, packDir, code, shaders, fresh);
                 j.save();
                 Job.remember(a, j.file);
                 job = j;

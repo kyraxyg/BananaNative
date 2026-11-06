@@ -274,6 +274,16 @@ public final class PackService extends Service {
                 Job.deleteTree(new File(j.dir(), "xlate"));
                 Job.deleteTree(new File(j.dir(), "lib"));
             }
+            if (j.freshPending()) {   // Rebuild from scratch (Job.fresh): nothing an earlier run made is reused
+                Log.i(TAG, "rebuild from scratch: deleting the split, the shader results and libraries, and the pack's module keys");
+                Outputs.delete(new File(j.dir(), "split"));
+                Job.deleteTree(j.splitScan(this));
+                Job.deleteTree(new File(j.dir(), "xlate"));
+                Job.deleteTree(new File(j.dir(), "lib"));
+                File[] keys = j.pack().listFiles((d, n) -> n.endsWith(".android.key"));   // pack_android.py keeps a module whose key file matches: without it, every module is rewritten
+                if (keys != null) for (File k : keys) if (!k.delete()) throw new IOException("cannot delete " + k);
+                j.freshCleaned();
+            }
             j.state("running", null, null);
             save(j, true);
             int i;
@@ -448,7 +458,8 @@ public final class PackService extends Service {
         // (bare names: the linker finds them in the APK, as System.loadLibrary does; ctypes loads them in this process)
         PackEngine.setenv("DMSH_VK_RESULTS", xlate.getPath());
         // the delta update: entries of the pack's older libraries that the profile's manifest has unchanged are kept, only the rest translated (android/SHADERS.md#delta-updates)
-        PackEngine.setenv("DMSH_VK_DELTA_FROM", new File(pack, "shaders").getPath());
+        // (a rebuild from scratch takes nothing from them: a folder that does not exist, so vk_android_build.py finds no older library and translates every shader)
+        PackEngine.setenv("DMSH_VK_DELTA_FROM", j.fresh() ? new File(od, "no-delta").getPath() : new File(pack, "shaders").getPath());
         PackEngine.setenv("XLATE", "libdmsh_xlate.so");
         PackEngine.setenv("SPIRV_VAL", "libSPIRV-Tools-shared.so");
         PackEngine.setenv("DMSH_VK_REQUIRE_ALL", "1");   // a library without every shader is a failed step, never a finished one
