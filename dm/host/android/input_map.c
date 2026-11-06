@@ -3,6 +3,7 @@
 #include "../motion_fusion.h"
 #include <math.h>
 #include <string.h>
+#include <strings.h>
 
 uint64_t nxin_key_button(int k, int labelled) {
     switch (k) {
@@ -25,9 +26,52 @@ uint64_t nxin_key_button(int k, int labelled) {
     default: return 0;   // BUTTON_MODE (Home), C, Z, BACK: nothing on the Switch side; left to the launcher
     }
 }
-int nxin_pad_key(nxin_pad *p, int k, int down, int labelled) {
-    uint64_t b = nxin_key_button(k, labelled);
-    if (!b) return 0;
+int nxin_pad_key(nxin_pad *p, int k, int down, int labelled) { return nxin_pad_key_map(p, NULL, k, down, labelled); }
+
+static const struct { const char *name; uint64_t b; } k_btn_names[] = {
+    {"A", DM_BTN_A}, {"B", DM_BTN_B}, {"X", DM_BTN_X}, {"Y", DM_BTN_Y}, {"L", DM_BTN_L}, {"R", DM_BTN_R}, {"ZL", DM_BTN_ZL}, {"ZR", DM_BTN_ZR},
+    {"PLUS", DM_BTN_PLUS}, {"MINUS", DM_BTN_MINUS}, {"LS", DM_BTN_LS}, {"RS", DM_BTN_RS},
+    {"UP", DM_BTN_UP}, {"DOWN", DM_BTN_DOWN}, {"LEFT", DM_BTN_LEFT}, {"RIGHT", DM_BTN_RIGHT}, {"NONE", 0},
+};
+static int map_find(const nxin_map *m, int k) {
+    if (m) for (int i = 0; i < m->n; i++) if (m->key[i] == k) return i;
+    return -1;
+}
+int nxin_map_parse(nxin_map *m, const char *s) {
+    memset(m, 0, sizeof *m);
+    while (s && *s) {
+        const char *end = strchr(s, ','); size_t len = end ? (size_t)(end - s) : strlen(s);
+        char pair[32] = {0};
+        if (len < sizeof pair) {
+            memcpy(pair, s, len);
+            char *eq = strchr(pair, '='), *name = eq ? eq + 1 : NULL;
+            int key = 0, digits = 0;
+            for (char *c = pair; eq && c < eq; c++) {
+                if (*c == ' ') continue;
+                if (*c < '0' || *c > '9' || ++digits > 3) { digits = 0; break; }
+                key = key * 10 + (*c - '0');
+            }
+            while (name && *name == ' ') name++;
+            for (char *c = name ? name + strlen(name) : NULL; c && c > name && c[-1] == ' '; ) *--c = 0;
+            int bi = -1;
+            for (size_t i = 0; name && i < sizeof k_btn_names / sizeof *k_btn_names; i++) if (!strcasecmp(name, k_btn_names[i].name)) bi = (int)i;
+            if (digits && key >= 1 && key <= 999 && bi >= 0 && map_find(m, key) < 0 && m->n < NXIN_MAP_MAX) {
+                m->key[m->n] = key; m->btn[m->n] = k_btn_names[bi].b; m->n++;
+            }
+        }
+        if (!end) break;
+        s = end + 1;
+    }
+    return m->n;
+}
+uint64_t nxin_map_button(const nxin_map *m, int k, int labelled) {
+    int i = map_find(m, k);
+    return i >= 0 ? m->btn[i] : nxin_key_button(k, labelled);
+}
+int nxin_map_takes(const nxin_map *m, int k) { return map_find(m, k) >= 0 || nxin_key_button(k, 0) != 0; }
+int nxin_pad_key_map(nxin_pad *p, const nxin_map *m, int k, int down, int labelled) {
+    if (!nxin_map_takes(m, k)) return 0;
+    uint64_t b = nxin_map_button(m, k, labelled);
     if (down) p->keys |= b; else p->keys &= ~b;
     return 1;
 }

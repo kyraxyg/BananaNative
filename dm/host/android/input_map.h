@@ -28,6 +28,15 @@ typedef struct {
     int lt_on, rt_on;              // the triggers as ZL / ZR, with hysteresis
 } nxin_pad;
 int nxin_pad_key(nxin_pad *p, int keycode, int down, int labelled);   // 1 when the key is a pad button (the launcher then consumes the event)
+// The player's own button map (DM_PAD_MAP, which the launcher's Settings › Gamepad buttons writes): pairs "<Android keycode>=<Switch button>" separated by commas,
+// the button one of A B X Y L R ZL ZR PLUS MINUS LS RS UP DOWN LEFT RIGHT, or NONE (the key does nothing). A mapped key takes its button in place of the layout's
+// (labelled), so a pad whose driver reports its face buttons under other names (the AYN Odin 3's) can be put right key by key; keys not in the map keep the layout's
+#define NXIN_MAP_MAX 32
+typedef struct { int n; int key[NXIN_MAP_MAX]; uint64_t btn[NXIN_MAP_MAX]; } nxin_map;
+int nxin_map_parse(nxin_map *m, const char *spec);                     // the pairs taken (a malformed pair, a keycode out of 1..999 or a repeated key is skipped)
+uint64_t nxin_map_button(const nxin_map *m, int keycode, int labelled); // the mapped button, else nxin_key_button's (m may be NULL); 0 for none
+int nxin_map_takes(const nxin_map *m, int keycode);                     // 1 when the key belongs to the pad: a pad button or a mapped key (NONE included)
+int nxin_pad_key_map(nxin_pad *p, const nxin_map *m, int keycode, int down, int labelled);   // nxin_pad_key through the map
 int nxin_pad_axis(nxin_pad *p, int axis, float v);                     // 1 when the axis is used
 // One MotionEvent's axes (only those the device has: InputDevice.getMotionRange). A device that has Z / RZ has its right stick there (Android's key layouts put it there,
 // with the triggers on LTRIGGER / RTRIGGER), and its RX / RY are left out, so a pad that also reports RX / RY as idle or as triggers does not pull the stick back. Returns 1 when any is used

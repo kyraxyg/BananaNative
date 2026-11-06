@@ -48,7 +48,7 @@ public final class MainActivity extends Activity {
     private LinearLayout gameBox;   // the game cards (refresh)
     private View accessCard;
     private BananaBackgroundView bananas;   // the drifting bananas behind the screen
-    private Ui.Setting overlayRow, resRow, capRow, lsfgRow, gpuRow, updateRow;
+    private Ui.Setting overlayRow, resRow, capRow, lsfgRow, gpuRow, updateRow, padRow;
     private boolean resumed, settingsPage;
     private boolean merged;   // the list's duplicates were merged (Game.collapse) since this activity started
     private File pendingGame;   // a game folder (or .nup) waiting for its pack folder
@@ -163,6 +163,11 @@ public final class MainActivity extends Activity {
         hint.setPadding(dp(4), 0, dp(4), 0);
         Ui.add(content, hint, 8);
 
+        Ui.add(content, Ui.section(this, "Controls"), Ui.SECTION_GAP);
+        LinearLayout ctl = settingsCard(content);
+        padRow = new Ui.Setting(this, "🕹️", "Gamepad buttons", v -> PadMapUi.dialog(this, this::refreshSettings)).chevron(this);   // the face button layout and the custom map (PadMap.java)
+        ctl.addView(padRow.view);
+
         Ui.add(content, Ui.section(this, "System"), Ui.SECTION_GAP);
         LinearLayout sys = settingsCard(content);
         gpuRow = new Ui.Setting(this, "🎮", "GPU driver", v -> GpuDriver.dialog(this, PICK_DRIVER)).chevron(this);   // custom GPU drivers (GpuDriver.java)
@@ -206,6 +211,7 @@ public final class MainActivity extends Activity {
         lsfgRow.value(!BuildConfig.NX_LSFG ? "Not in this build" : Lsfg.on(this) ? "On · " + Lsfg.multiplier(this) + "x" + (Lsfg.find(this) == null ? " · Lossless.dll missing" : "") : "Off");
         GpuDriver.Info d = GpuDriver.selected(this);
         gpuRow.value(d == null ? "System" : d.label());
+        padRow.value(PadMap.label(Prefs.padLayout(this), Prefs.padMap(this)));
     }
 
     @Override public void onWindowFocusChanged(boolean focus) {

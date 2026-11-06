@@ -20,6 +20,30 @@ static void t_keys(void) {
     uint64_t all = 0; for (int k = 0; k < 300; k++) { uint64_t b = nxin_key_button(k, 0); CHECK(!(all & b), "bit %#llx twice", (unsigned long long)b); all |= b; }
     CHECK(all == 0xffff, "all sixteen buttons: %#llx", (unsigned long long)all);
 }
+static void t_map(void) {
+    nxin_map m;
+    // the AYN Odin 3's swapped face buttons put right: each key to the button printed on it
+    CHECK(nxin_map_parse(&m, "96=A,97=B, 99 = x ,100=Y") == 4, "four pairs: %d", m.n);
+    CHECK(nxin_map_button(&m, AK_BUTTON_A, 0) == DM_BTN_A && nxin_map_button(&m, AK_BUTTON_B, 0) == DM_BTN_B, "A / B mapped");
+    CHECK(nxin_map_button(&m, AK_BUTTON_X, 0) == DM_BTN_X && nxin_map_button(&m, AK_BUTTON_Y, 0) == DM_BTN_Y, "X / Y mapped, spaces and case ignored");
+    CHECK(nxin_map_button(&m, AK_BUTTON_L1, 0) == DM_BTN_L && nxin_map_button(&m, AK_DPAD_UP, 0) == DM_BTN_UP, "keys not in the map keep the layout's");
+    CHECK(nxin_map_button(NULL, AK_BUTTON_A, 0) == DM_BTN_B && nxin_map_button(NULL, AK_BUTTON_A, 1) == DM_BTN_A, "no map: the layout");
+    // a key the layout leaves out can be given a button, and NONE takes a key away (still the pad's: the launcher does not get it)
+    CHECK(nxin_map_parse(&m, "98=ZR,108=none,109=PLUS") == 3, "three pairs: %d", m.n);
+    CHECK(nxin_map_takes(&m, AK_BUTTON_C) && nxin_map_button(&m, AK_BUTTON_C, 0) == DM_BTN_ZR, "C → ZR");
+    CHECK(nxin_map_takes(&m, AK_BUTTON_START) && nxin_map_button(&m, AK_BUTTON_START, 0) == 0, "Start → nothing");
+    CHECK(!nxin_map_takes(&m, AK_BACK) && !nxin_map_takes(NULL, AK_BUTTON_C), "unmapped non-pad keys stay the launcher's");
+    // malformed pairs are skipped, the rest taken
+    CHECK(nxin_map_parse(&m, "96=Q,=A,abc=B,0=A,1000=A,97=B,97=A,99=,,100=Y,9999999999999999999999999999999999=A") == 2, "two good pairs: %d", m.n);
+    CHECK(nxin_map_button(&m, AK_BUTTON_B, 0) == DM_BTN_B && nxin_map_button(&m, AK_BUTTON_A, 0) == DM_BTN_B, "the first of a repeated key wins; a bad pair keeps the layout");
+    CHECK(nxin_map_parse(&m, "") == 0 && nxin_map_parse(&m, NULL) == 0, "empty");
+    // through the pad state
+    nxin_pad p = {0};
+    nxin_map_parse(&m, "96=A,97=B");
+    CHECK(nxin_pad_key_map(&p, &m, AK_BUTTON_A, 1, 0) && p.keys == DM_BTN_A, "A held: %#llx", (unsigned long long)p.keys);
+    CHECK(nxin_pad_key_map(&p, &m, AK_BUTTON_A, 0, 0) && p.keys == 0, "A let go");
+    CHECK(!nxin_pad_key_map(&p, &m, AK_BACK, 1, 0), "Back is not the pad's");
+}
 static void t_pad(void) {
     nxin_pad p = {0}; uint64_t b; int32_t lx, ly, rx, ry;
     nxin_pad_key(&p, AK_BUTTON_B, 1, 0); nxin_pad_key(&p, AK_BUTTON_R1, 1, 0);
@@ -150,7 +174,7 @@ static void t_shake(void) {
     CHECK(!nxin_shake_feed(&s, (float[]){0.8f, 0, -1}, t + 210000000), "0.8 G is no shake");
 }
 int main(void) {
-    t_keys(); t_pad(); t_touch(); t_layout(); t_motion(); t_shake();
+    t_keys(); t_map(); t_pad(); t_touch(); t_layout(); t_motion(); t_shake();
     if (fails) { printf("t_android_input: %d failures\n", fails); return 1; }
     printf("t_android_input: ok\n");
     return 0;

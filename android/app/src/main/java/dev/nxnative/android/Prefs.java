@@ -38,6 +38,13 @@ final class Prefs {
     static String window(Context c) { return of(c).getString("window", WINDOWS[0]); }
     static void window(Context c, String v) { of(c).edit().putString("window", v).commit(); }
 
+    /** Settings › Gamepad buttons (PadMap): the layout, "position" (the default), "label" or "custom", for every game; DM_PAD_LABELLED / DM_PAD_MAP for the host */
+    static String padLayout(Context c) { return PadMap.layoutOf(of(c).getString("pad_layout", PadMap.POSITION)); }
+    static void padLayout(Context c, String v) { of(c).edit().putString("pad_layout", PadMap.layoutOf(v)).commit(); }
+    /** The custom map, "&lt;keycode&gt;=&lt;button&gt;" pairs (PadMap.parse); "" = none */
+    static String padMap(Context c) { return of(c).getString("pad_map", ""); }
+    static void padMap(Context c, String v) { put(c, "pad_map", v == null || v.isEmpty() ? null : v); }
+
     // ---- A game's own settings (its Manage sheet › Game settings, the in-game panel), stored per title ID as "<key>@<title ID>"; a game without its own value
     // takes the default (the main screen's Settings, global). DKB with nothing of its own set runs exactly as before ----
     static String gameKey(String key, String titleId) { return key + "@" + titleId; }

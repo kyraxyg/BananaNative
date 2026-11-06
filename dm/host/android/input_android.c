@@ -20,12 +20,21 @@
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;   // pads, slots, touch, shake
 static pad_slots g_slots;
 static int g_labelled[DM_PLAYERS];
+static nxin_map g_map; static int g_map_init;   // DM_PAD_MAP (input_map.h), read once
 static nxin_pad g_pad[DM_PLAYERS];
 static float g_dz = -1;
 static nxin_touch g_touch; static int g_touch_init;
 static uint64_t g_shake_btn;
 static int g_held;   // the text input box is up: pad and touch events are dropped (android_text_input)
 
+static const nxin_map *pad_map(void) {   // under g_mu
+    if (!g_map_init) {
+        g_map_init = 1;
+        const char *e = getenv("DM_PAD_MAP");
+        if (e && *e) LOG("input: button map %s: %d key(s) mapped", e, nxin_map_parse(&g_map, e));
+    }
+    return &g_map;
+}
 static void touch_once(void) { if (!g_touch_init) { nxin_touch_init(&g_touch); g_touch_init = 1; } }
 static const void *owner(int device) { return (const void *)(intptr_t)((int64_t)device + 0x100000000ll); }   // never NULL, even for device 0
 static float deadzone(void) {
@@ -74,11 +83,12 @@ void nxhost_input_device_removed(int device) {
 }
 int nxhost_input_device_player(int device) { pthread_mutex_lock(&g_mu); int p = pad_slot_of(&g_slots, owner(device)); pthread_mutex_unlock(&g_mu); return p; }
 bool nxhost_input_key(int device, int keycode, bool down) {
-    if (!nxin_key_button(keycode, 0)) return false;
     pthread_mutex_lock(&g_mu);
+    const nxin_map *m = pad_map();
+    if (!nxin_map_takes(m, keycode)) { pthread_mutex_unlock(&g_mu); return false; }
     if (g_held) { pthread_mutex_unlock(&g_mu); return true; }
     int p = take(device, NULL, 0);
-    if (p >= 0 && nxin_pad_key(&g_pad[p], keycode, down, g_labelled[p])) publish_pad(p);
+    if (p >= 0 && nxin_pad_key_map(&g_pad[p], m, keycode, down, g_labelled[p])) publish_pad(p);
     pthread_mutex_unlock(&g_mu);
     return true;
 }
