@@ -1,0 +1,76 @@
+# Builds the Android APK (android/README.md "Build the APK") on a GitHub macOS runner: the on-device packer's stage (android/ondevice/build.sh: CPython 3.14 for
+# Android, Capstone, lz4, the NativeAOT translator, SPIRV-Tools) and then Gradle, with the games given. The APK is signed with the debug key; by default it is the
+# play app (dev.nxnative.android.play, "Banana Native"), which installs beside the public release and keeps its own packs and saves (Export pack… / Import pack…
+# moves a pack between them). The result is the run's artifact "apk".
+name: Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      games:
+        description: 'Title IDs, comma-separated (the first is the default)'
+        default: '0400C3F00006E000'
+      app:
+        description: 'play (dev.nxnative.android.play) or test (dev.nxnative.android)'
+        default: 'play'
+  push:
+    branches: ['ccr-*']
+    paths: ['android/**', 'dm/host/**', 'dm/gfx/**', 'dm/games/**', 'scripts/pack_android.py', '.github/workflows/android-apk.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  apk:
+    runs-on: macos-15
+    timeout-minutes: 240
+    env:
+      GAMES: ${{ github.event.inputs.games || '0400C3F00006E000' }}
+      APP: ${{ github.event.inputs.app || 'play' }}
+      NDK_VERSION: '28.2.13676358'
+      STAGE_DIR: ${{ github.workspace }}/../pack-work
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Tools (Java 17, NDK, CMake, Ninja)
+        run: |
+          echo "JAVA_HOME=${JAVA_HOME_17_arm64:-$JAVA_HOME_17_X64}" >> "$GITHUB_ENV"
+          brew list ninja >/dev/null 2>&1 || brew install ninja
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses >/dev/null || true
+          "$SDKM" --install "ndk;$NDK_VERSION" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          python -m pip install --quiet lz4 "capstone>=5,<6"
+      - name: Packer stage (android/ondevice/build.sh)
+        run: |
+          mkdir -p "$STAGE_DIR"
+          zsh android/ondevice/build.sh "$STAGE_DIR"
+      - name: APK
+        working-directory: android/app
+        run: |
+          extra=()
+          [ "$APP" = play ] && extra+=(-PnxPlay=true)
+          ./gradlew --no-daemon -PnxPackStage="$STAGE_DIR/stage" -PnxGames="$GAMES" "${extra[@]}" apk
+          ls -la out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apk
+          path: android/app/out/*.apk
+          if-no-files-found: error
+      - name: Logs on failure
+        if: failure()
+        run: |
+          for f in "$STAGE_DIR"/*.log "$STAGE_DIR"/build/*.log; do [ -f "$f" ] && { echo "== $f"; tail -60 "$f"; }; done || true
