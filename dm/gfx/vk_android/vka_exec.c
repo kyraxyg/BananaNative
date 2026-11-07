@@ -30,8 +30,21 @@ static int g_origin_ll = 1, g_queue_origin_ll = 1, g_depth_zero;
 _Atomic int vka_synclog_n;   // DM_VK_SYNCLOG: lines left (mtl_wait)
 #define g_synclog vka_synclog_n
 static double ms_now(void) { return (now_ns() % 1000000000000ull) / 1e6; }
-#define RC_PEND 64
-static uint64_t g_rc_ts[RC_PEND]; static int g_nrc_ts;   // timestamp reports replayed in this submission (their counter field reads 0 once written)
+#define RC_PEND 256
+// Reports replayed in this submission (written only when the GPU completes it): kind 1 = a timestamp (its counter field reads 0 once written), 2 = another counter
+// (samples passed: unknown until then). And every address a non-timestamp report has ever written: a condition on it keeps drawing, as nvn_mtl.m rc_value does.
+// Without them a condition on an occlusion query read memory as the last completion left it: the completion writes 1 for every samples-passed report (vka_post),
+// so a RENDER_IF_NOT_EQUAL on two of them skipped the draw once both had completed and drew it while one was still in flight. Suspected for Mario Kart World's
+// roadside trees, drawn in one frame and gone in the next on an AYN Odin 3 (2026-11-07; not yet run with this: the log line below says whether such conditions come)
+static struct { uint64_t addr; int kind; } g_rc_pend[RC_PEND]; static int g_nrc_pend;
+static uint64_t g_rc_occ[4096];   // open addressing; the replay thread only
+static void rc_occ_add(uint64_t a) { for (uint32_t i = (uint32_t)(a >> 4) & 4095, k = 0; k < 4096; k++, i = (i + 1) & 4095) { if (g_rc_occ[i] == a) return; if (!g_rc_occ[i]) { g_rc_occ[i] = a; return; } } }
+static int rc_occ_has(uint64_t a) { for (uint32_t i = (uint32_t)(a >> 4) & 4095, k = 0; k < 4096; k++, i = (i + 1) & 4095) { if (g_rc_occ[i] == a) return 1; if (!g_rc_occ[i]) return 0; } return 0; }
+static void rc_note(uint64_t a, int kind) {
+    if (kind == 2) rc_occ_add(a);
+    for (int i = 0; i < g_nrc_pend; i++) if (g_rc_pend[i].addr == a) { g_rc_pend[i].kind = kind; return; }
+    if (g_nrc_pend < RC_PEND) { g_rc_pend[g_nrc_pend].addr = a; g_rc_pend[g_nrc_pend++].kind = kind; }
+}
 
 int vka_origin_ll(void) { return __atomic_load_n(&g_origin_ll, __ATOMIC_RELAXED); }
 int vka_queue_origin_ll(void) { return g_queue_origin_ll; }
@@ -212,7 +225,7 @@ void vka_exec_hang_report(uint64_t fence) {
 void vka_rp_sub_begin(void) {
     vka_perf_thread(0); vka_ctl_sub();
     { uint64_t f = g_job_frame_set ? g_job_frame : g_frame; if (atomic_load(&g_fstart_f[f % 64]) != f) { atomic_store(&g_fstart[f % 64], now_ns()); atomic_store(&g_fstart_f[f % 64], f); } }
-    g_npost = 0; g_nrc_ts = 0; g_cb = VK_NULL_HANDLE;
+    g_npost = 0; g_nrc_pend = 0; g_cb = VK_NULL_HANDLE;
     if (!vka_init()) return;
     vka_gpu_floor();
     if (vka_hung()) { VRED_ONCE("GPU hang: submissions from now on run their effects without the GPU"); return; }   // no command buffer: mtl_sub_commit takes the CPU path
@@ -677,8 +690,9 @@ static void not_yet(uint32_t op) {
     g_stat_skipped++;
     VRED_ONCE("DrawTexture (op %u) is not on Vulkan yet: skipped from now on", op);
 }
-static int rc_known(uint64_t a, uint64_t *v) {   // a counter at a: 0 for a timestamp report earlier in this submission, else what memory holds now (0 = unknown)
-    for (int i = 0; i < g_nrc_ts; i++) if (g_rc_ts[i] == a) { *v = 0; return 1; }
+static int rc_known(uint64_t a, uint64_t *v) {   // a counter at a: 0 for a timestamp report earlier in this submission, else what memory holds now (0 = unknown: an occlusion query's)
+    if (rc_occ_has(a)) return 0;
+    for (int i = g_nrc_pend - 1; i >= 0; i--) if (g_rc_pend[i].addr == a) { if (g_rc_pend[i].kind != 1) return 0; *v = 0; return 1; }
     if (!vka_addr(a, 8, NULL, NULL, NULL)) return 0;
     memcpy(v, (const void *)(uintptr_t)a, 8); return 1;
 }
@@ -712,14 +726,15 @@ static void exec(const uint8_t *p, int depth) {
                 if (!vka_enc_call(seg_write, &w, sizeof w)) seg_write(&w);
             }
             post((pop){2, 0, q, (uint32_t)t, ad});
-            if ((t == NVN_COUNTER_TYPE_TIMESTAMP || t == NVN_COUNTER_TYPE_TIMESTAMP_TOP) && DM_GAME_RENDER_COND && g_nrc_ts < RC_PEND) g_rc_ts[g_nrc_ts++] = ad;
+            if (DM_GAME_RENDER_COND) rc_note(ad, t == NVN_COUNTER_TYPE_TIMESTAMP || t == NVN_COUNTER_TYPE_TIMESTAMP_TOP ? 1 : 2);
             if (atomic_load_explicit(&g_synclog, memory_order_relaxed) > 0) VLOG("sync report: frame %llu type %llu at draw %llu of the submission, part %d, recording at %.2f ms", (unsigned long long)g_frame,
                                                                            (unsigned long long)t, (unsigned long long)(g_stat_draws - g_sub_draws0), g_nx + 1, ms_now());
             break; }
         case OP_FENCE_SYNC: { sync_t *s; memcpy(&s, a, 8); s->fence = g_cur_fence ? g_cur_fence : vka_fence_last() + 1; s->fenced = 1; break; }   // the fence this submission commits with
         case OP_RENDER_COND: { const p_render_cond *rc = a;
             if (rc->mode >= 2) S.rc_skip = rc->mode == 3;
-            else { uint64_t x, y; int known = rc_known(rc->addr, &x) && rc_known(rc->addr + 16, &y); S.rc_skip = known && (rc->mode ? x == y : x != y); }
+            else { uint64_t x, y; int known = rc_known(rc->addr, &x) && rc_known(rc->addr + 16, &y); S.rc_skip = known && (rc->mode ? x == y : x != y);
+                static int seen; if (!known && !seen && (rc_occ_has(rc->addr) || rc_occ_has(rc->addr + 16))) { seen = 1; VLOG("conditional render on a samples-passed (occlusion query) result at %#llx: drawn, as on the Mac", (unsigned long long)rc->addr); } }
             break; }
         case OP_RESET_COUNTER: break;
         case OP_CLEAR_BUF: if (g_cb) { const p_clear_buf *cb = a; buf_fill(cb->addr, cb->size, cb->value); vka_barrier(g_cb); } break;
