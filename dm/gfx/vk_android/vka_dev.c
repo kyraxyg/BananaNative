@@ -173,6 +173,8 @@ static int init_once(void) {
     V.placed_align = pmp.minPlacedMemoryMapAlignment ? pmp.minPlacedMemoryMapAlignment : 4096; V.max_alloc = pm3.maxMemoryAllocationSize;
     V.max_push = V.push_desc ? ppd.maxPushDescriptors : 0;
     if (V.mesh && !vk.vkCmdDrawMeshTasksEXT) V.mesh = V.task = 0;
+    { const char *e = getenv("DM_VK_IND_COUNT"); V.ind_count = !(e && !strcmp(e, "0")) && f12.drawIndirectCount && vk.vkCmdDrawIndirectCount && vk.vkCmdDrawIndexedIndirectCount;   // restart only
+      VLOG("indirect-count multi-draws: %s", V.ind_count ? "the GPU reads the count (vkCmdDrawIndexedIndirectCount; DM_VK_IND_COUNT=0 off)" : f12.drawIndirectCount ? "off (DM_VK_IND_COUNT=0): the count is read on the CPU" : "no drawIndirectCount on this device: the count is read on the CPU"); }
     if (V.mesh) { V.mesh_inv = pmesh.maxMeshWorkGroupInvocations; V.task_inv = pmesh.maxTaskWorkGroupInvocations; V.mesh_out_v = pmesh.maxMeshOutputVertices;
                   V.mesh_out_p = pmesh.maxMeshOutputPrimitives; V.task_payload = pmesh.maxTaskPayloadSize;
                   V.task_groups = pmesh.maxTaskWorkGroupCount[0]; V.mesh_groups = pmesh.maxMeshWorkGroupCount[0]; }

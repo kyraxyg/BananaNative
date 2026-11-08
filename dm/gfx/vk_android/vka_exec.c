@@ -698,6 +698,34 @@ static int rc_known(uint64_t a, uint64_t *v) {   // a counter at a: 0 for a time
     memcpy(v, (const void *)(uintptr_t)a, 8); return 1;
 }
 
+// Draw 0 of an indirect-count multi-draw (hle_nvn.c records one draw per record, each with the count's address and its index, back to back): the records that follow
+// it with the same count and the next indices, their stride from the record addresses. *n = how many (0: not a multi-draw's first draw, no drawIndirectCount, or a stride
+// Vulkan refuses: each record is then drawn on its own, its count read on the CPU). Returns where the exec goes on after the last of them (OP_JUMPs followed)
+static const uint8_t *mdc_scan(const uint8_t *p, const op_hdr *h, const void *rec0, uint32_t *n, uint32_t *stride) {
+    *n = 0;
+    int idx = h->op == OP_DRAW_IDX; p_draw t0; p_draw_idx u0;
+    const p_draw *d0 = idx ? NULL : draw_rec(rec0, h->size, &t0); const p_draw_idx *e0 = idx ? draw_idx_rec(rec0, h->size, &u0) : NULL;
+    uint64_t cnt = idx ? e0->mdi_cnt : d0->mdi_cnt, ind0 = idx ? e0->ind : d0->ind; int i0 = idx ? e0->mdi_i : d0->mdi_i;
+    uint32_t rsz = idx ? 20 : 16;
+    if (!cnt || i0 != 0 || !ind0 || !V.ind_count) return p + h->size;
+    const uint8_t *q = p + h->size, *after = q; uint32_t k = 1; uint64_t st = rsz;
+    for (int guard = 0; guard < 4096; guard++) {
+        op_hdr hh; memcpy(&hh, q, sizeof hh);
+        if (hh.op == OP_JUMP) { memcpy(&q, q + 8, 8); continue; }
+        if (hh.op != h->op || hh.size < 8) break;
+        p_draw t; p_draw_idx u; const void *a = q + 8;
+        const p_draw *d = idx ? NULL : draw_rec(a, hh.size, &t); const p_draw_idx *e = idx ? draw_idx_rec(a, hh.size, &u) : NULL;
+        uint64_t c = idx ? e->mdi_cnt : d->mdi_cnt, ind = idx ? e->ind : d->ind; int i = idx ? e->mdi_i : d->mdi_i;
+        if (idx ? e->ibuf != e0->ibuf || e->itype != e0->itype || e->prim != e0->prim : d->prim != d0->prim) break;   // the same call's records
+        if (c != cnt || i != (int)k || ind <= ind0) break;
+        if (k == 1) st = ind - ind0; else if (ind - ind0 != st * k) break;
+        k++; q += hh.size; after = q;
+    }
+    if (st % 4 || st < rsz || st > 0xffffffffu) return p + h->size;   // Vulkan: a multiple of 4, at least the record's size
+    *n = k; *stride = (uint32_t)st;
+    return after;
+}
+
 static void seg_write(const void *a) { struct { VkCommandBuffer cb; VkPipelineStageFlagBits st; uint32_t q; } w; memcpy(&w, a, sizeof w); qf.write(w.cb, w.st, g_sqp, w.q); }
 static void exec(const uint8_t *p, int depth) {
     for (;;) {
@@ -751,8 +779,14 @@ static void exec(const uint8_t *p, int depth) {
         case OP_COPY_T2B: if (g_cb) copy_bt(a, 0); break;
         case OP_COPY_T2T: if (g_cb) copy_t2t(a); break;
         case OP_BARRIER: if (g_cb && !bar_kept) vka_barrier(g_cb); break;
-        case OP_DRAW: if (!S.rc_skip && g_cb) { p_draw t; g_stat_draws++; vka_draw(&S.d, &S.rt, S.has_rt, &S.sc, S.has_sc, draw_rec(a, h.size, &t), NULL); } break;
-        case OP_DRAW_IDX: if (!S.rc_skip && g_cb) { p_draw_idx t; g_stat_draws++; vka_draw(&S.d, &S.rt, S.has_rt, &S.sc, S.has_sc, NULL, draw_idx_rec(a, h.size, &t)); } break;
+        case OP_DRAW: case OP_DRAW_IDX: if (!S.rc_skip && g_cb) {
+            uint32_t mn, ms; const uint8_t *next = mdc_scan(p, &h, a, &mn, &ms);   // an indirect-count multi-draw: one draw, its count read by the GPU (vka_draw_mdc)
+            p_draw t; p_draw_idx u; g_stat_draws++;
+            if (mn) { static int seen; if (!seen) { seen = 1; VLOG("indirect-count multi-draw: %u records, stride %u, drawn with the count read by the GPU", mn, ms); } vka_draw_mdc(mn, ms); }
+            if (h.op == OP_DRAW) vka_draw(&S.d, &S.rt, S.has_rt, &S.sc, S.has_sc, draw_rec(a, h.size, &t), NULL);
+            else vka_draw(&S.d, &S.rt, S.has_rt, &S.sc, S.has_sc, NULL, draw_idx_rec(a, h.size, &u));
+            if (mn) { p = next; continue; }
+        } break;
         case OP_DISPATCH: if (g_cb) vka_dispatch(&S.d, a); break;
         case OP_DRAW_TEX: not_yet(h.op); break;
         default: break;   // state: taken by vka_state_op above
