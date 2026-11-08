@@ -907,15 +907,46 @@ public final class MainActivity extends Activity {
 
     private void shareLog() { shareLog(null); }
 
-    /** The newest log of a game (titleId), or of any run (null) */
+    /**
+     * The newest log of a game (titleId), or of any run (null): where it is, then Share… (the phone's share menu) or Save to Downloads (LogExport), for a phone whose
+     * share menu does not open: before, a menu that failed to open left the tap without any answer
+     */
     private void shareLog(String titleId) {
         File log = LogProvider.newest(this, titleId);
         if (log == null) { error(titleId == null ? "No log yet." : "No log of this game yet."); return; }
-        Uri uri = LogProvider.uri(log);
-        Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_STREAM, uri).putExtra(Intent.EXTRA_SUBJECT, "nxnative log " + log.getName());
-        send.setClipData(ClipData.newRawUri(log.getName(), uri));
-        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        startActivity(Intent.createChooser(send, "Share " + log.getName()));
+        TextView t = Ui.small(this, log.getName() + " (" + SaveStore.size(log.length()) + ")\n\nIn " + log.getParent()
+                + "\n\nShare… opens the phone's share menu. Save to Downloads puts a copy in " + LogExport.FOLDER + ", to send from a file manager or over USB.");
+        t.setTextIsSelectable(true);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(t);
+        Ui.sheet(this, "Share log", box).setPositiveButton("Share…", (d, w) -> sendLog(log))
+                .setNeutralButton("Save to Downloads", (d, w) -> saveLog(log)).setNegativeButton("Cancel", null).show();
+    }
+
+    private void sendLog(File log) {
+        try {
+            Uri uri = LogProvider.uri(log);
+            Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_STREAM, uri).putExtra(Intent.EXTRA_SUBJECT, "nxnative log " + log.getName());
+            send.setClipData(ClipData.newRawUri(log.getName(), uri));
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(send, "Share " + log.getName()));
+        } catch (RuntimeException e) {
+            error("The share menu did not open (" + e + ").\n\nSave to Downloads puts a copy in " + LogExport.FOLDER + " instead.");
+        }
+    }
+
+    private void saveLog(File log) {
+        new Thread(() -> {
+            String msg;
+            try {
+                msg = "Saved: " + LogExport.toDownloads(this, log);
+            } catch (IOException | RuntimeException e) {
+                msg = "Could not save the log: " + e.getMessage();
+            }
+            String m = msg;
+            runOnUiThread(() -> error(m));
+        }, "nxlog-save").start();
     }
 
     void error(String msg) { new AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK", null).show(); }

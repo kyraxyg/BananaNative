@@ -691,8 +691,9 @@ static void not_yet(uint32_t op) {
     VRED_ONCE("DrawTexture (op %u) is not on Vulkan yet: skipped from now on", op);
 }
 static int rc_known(uint64_t a, uint64_t *v) {   // a counter at a: 0 for a timestamp report earlier in this submission, else what memory holds now (0 = unknown: an occlusion query's)
-    if (rc_occ_has(a)) return 0;
-    for (int i = g_nrc_pend - 1; i >= 0; i--) if (g_rc_pend[i].addr == a) { if (g_rc_pend[i].kind != 1) return 0; *v = 0; return 1; }
+    int occ = VKA_ENV("DM_VK_RC_OCC", 1) != 0;   // DM_VK_RC_OCC=0 (live): the earlier behaviour, a condition on an occlusion query read from memory (to compare on the device)
+    if (occ && rc_occ_has(a)) return 0;
+    for (int i = g_nrc_pend - 1; i >= 0; i--) if (g_rc_pend[i].addr == a) { if (occ && g_rc_pend[i].kind != 1) return 0; if (g_rc_pend[i].kind == 1) { *v = 0; return 1; } break; }
     if (!vka_addr(a, 8, NULL, NULL, NULL)) return 0;
     memcpy(v, (const void *)(uintptr_t)a, 8); return 1;
 }
